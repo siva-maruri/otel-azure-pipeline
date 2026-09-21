@@ -9,6 +9,7 @@ param workspaceId string
 @description('Dev SKU is fine for a demo. Use a Standard SKU with 2+ instances for anything real.')
 param skuName string = 'Dev(No SLA)_Standard_E2a_v4'
 param skuTier string = 'Basic'
+param capacity int = 1
 
 @description('Optional Entra group that gets read access (Viewer) to the telemetry database.')
 param viewerGroupObjectId string = ''
@@ -20,7 +21,7 @@ resource cluster 'Microsoft.Kusto/clusters@2023-08-15' = {
   sku: {
     name: skuName
     tier: skuTier
-    capacity: 1
+    capacity: capacity
   }
   identity: {
     type: 'SystemAssigned'

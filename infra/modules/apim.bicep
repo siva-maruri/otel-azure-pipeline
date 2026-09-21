@@ -9,6 +9,11 @@ param otlpAudience string
 param routerUrl string
 param workspaceId string
 
+@allowed(['Developer', 'Premium'])
+@description('Only Developer and Premium support VNet injection in internal mode.')
+param skuName string = 'Developer'
+param skuCapacity int = 1
+
 // stv2 VNet injection needs a Standard public IP for the management plane, even in internal mode.
 resource managementIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
   name: '${prefix}-apim-pip'
@@ -30,8 +35,8 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   location: location
   tags: tags
   sku: {
-    name: 'Developer'
-    capacity: 1
+    name: skuName
+    capacity: skuCapacity
   }
   properties: {
     publisherEmail: publisherEmail
