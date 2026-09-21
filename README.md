@@ -28,6 +28,8 @@ flowchart LR
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
 | `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
+| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets |
+| `docs/runbook.md` | What to check when traces stop arriving, the gateway backs up, or APIM rejects senders |
 
 ## Deploy
 
