@@ -12,6 +12,7 @@ echo "-- bicep"
 bicep build infra/main.bicep --outfile "$work/main.json"
 bicep lint infra/main.bicep
 bicep build-params infra/main.bicepparam --outfile "$work/main.parameters.json"
+bicep build-params infra/prod.bicepparam --outfile "$work/prod.parameters.json"
 
 echo "-- apim policy"
 python3 -c "import sys, xml.dom.minidom as m; m.parse(sys.argv[1])" apim/otlp-ingest-policy.xml
