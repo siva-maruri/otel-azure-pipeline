@@ -8,6 +8,7 @@ cd "$(dirname "$0")/.."
 rg="${1:?usage: deploy.sh <resource-group> [location]}"
 location="${2:-westus2}"
 chart_version="${CHART_VERSION:-0.173.1}"
+cert_manager_version="${CERT_MANAGER_VERSION:-v1.15.3}"
 
 az group create -n "$rg" -l "$location" -o none
 
@@ -21,7 +22,7 @@ aks="$(out aksName)"
 bundle="$(mktemp -d)"
 trap 'rm -rf "$bundle"' EXIT
 
-cp collector/gateway-values.yaml collector/router-values.yaml "$bundle/"
+cp collector/gateway-values.yaml collector/router-values.yaml collector/certs.yaml "$bundle/"
 cat > "$bundle/gateway-overrides.yaml" << YAML
 serviceAccount:
   annotations:
@@ -35,10 +36,18 @@ YAML
 
 echo "-- collectors"
 # The API server is private, so helm runs inside the cluster network via command invoke.
-# Gateway first: the router resolves the gateway's headless service.
+# cert-manager and the router/gateway certificates first (mTLS between the tiers), then the
+# gateway, then the router, which resolves the gateway's headless service.
 (
   cd "$bundle"
   az aks command invoke -g "$rg" -n "$aks" --file . --command "
+    helm repo add jetstack https://charts.jetstack.io &&
+    helm upgrade --install cert-manager jetstack/cert-manager --version $cert_manager_version \
+      -n cert-manager --create-namespace --set crds.enabled=true --wait &&
+    kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f - &&
+    kubectl apply -f certs.yaml &&
+    kubectl -n observability wait --for=condition=Ready --timeout=180s \
+      certificate/otel-gateway-tls certificate/otel-router-tls &&
     helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts &&
     helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
       --version $chart_version -n observability --create-namespace \
