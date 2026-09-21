@@ -1,0 +1,44 @@
+<!--
+  Front door for OTLP/HTTP from outside the cluster.
+  Senders get an Entra token (client credentials) for {{otlp-ingest-audience}} with the
+  Telemetry.Write app role. APIM checks it, meters the caller, and forwards to the
+  router collector on the internal load balancer. OTLP/gRPC stays inside the VNet.
+-->
+<policies>
+    <inbound>
+        <base />
+        <validate-jwt header-name="Authorization" failed-validation-httpcode="401" require-scheme="Bearer" output-token-variable-name="jwt">
+            <openid-config url="https://login.microsoftonline.com/{{tenant-id}}/v2.0/.well-known/openid-configuration" />
+            <audiences>
+                <audience>{{otlp-ingest-audience}}</audience>
+            </audiences>
+            <required-claims>
+                <claim name="roles" match="any">
+                    <value>Telemetry.Write</value>
+                </claim>
+            </required-claims>
+        </validate-jwt>
+        <!-- azp is the calling app's client id: one bucket per sender, not per IP. -->
+        <rate-limit-by-key calls="3000" renewal-period="60" counter-key='@(((Jwt)context.Variables["jwt"]).Claims.GetValueOrDefault("azp", "unknown"))' />
+        <quota-by-key calls="5000000" renewal-period="86400" counter-key='@(((Jwt)context.Variables["jwt"]).Claims.GetValueOrDefault("azp", "unknown"))' />
+        <choose>
+            <when condition='@(int.Parse(context.Request.Headers.GetValueOrDefault("Content-Length", "0")) > 4194304)'>
+                <return-response>
+                    <set-status code="413" reason="Payload Too Large" />
+                </return-response>
+            </when>
+        </choose>
+        <!-- The collector doesn't need the caller's token, and it shouldn't end up in telemetry. -->
+        <set-header name="Authorization" exists-action="delete" />
+        <set-backend-service base-url="{{otlp-router-url}}" />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
