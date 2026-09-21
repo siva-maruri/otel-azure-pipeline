@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Deploy the Azure resources, then install the router and gateway collectors.
+#   bash scripts/deploy.sh <resource-group> [location]
+# Needs: az (logged in), jq. First run takes a while: APIM in VNet mode is 30-45 minutes.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+rg="${1:?usage: deploy.sh <resource-group> [location]}"
+location="${2:-westus2}"
+chart_version="${CHART_VERSION:-0.173.1}"
+
+az group create -n "$rg" -l "$location" -o none
+
+echo "-- infra"
+outputs="$(az deployment group create -g "$rg" -n otel-pipeline \
+  -f infra/main.bicep -p infra/main.bicepparam \
+  --query properties.outputs -o json)"
+out() { jq -r ".$1.value" <<< "$outputs"; }
+
+aks="$(out aksName)"
+bundle="$(mktemp -d)"
+trap 'rm -rf "$bundle"' EXIT
+
+cp collector/gateway-values.yaml collector/router-values.yaml "$bundle/"
+cat > "$bundle/gateway-overrides.yaml" << YAML
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: "$(out collectorClientId)"
+extraEnvs:
+  - name: ADX_CLUSTER_URI
+    value: "$(out adxClusterUri)"
+  - name: ARCHIVE_BLOB_URL
+    value: "$(out archiveBlobUrl)"
+YAML
+
+echo "-- collectors"
+# The API server is private, so helm runs inside the cluster network via command invoke.
+# Gateway first: the router resolves the gateway's headless service.
+(
+  cd "$bundle"
+  az aks command invoke -g "$rg" -n "$aks" --file . --command "
+    helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts &&
+    helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
+      --version $chart_version -n observability --create-namespace \
+      -f gateway-values.yaml -f gateway-overrides.yaml --wait &&
+    helm upgrade --install otel-router open-telemetry/opentelemetry-collector \
+      --version $chart_version -n observability \
+      -f router-values.yaml --wait"
+)
+
+echo
+echo "APIM gateway (private): $(out apimGatewayUrl)/otlp/v1/traces"
+echo "In-cluster OTLP:        otel-router-opentelemetry-collector.observability:4317"
