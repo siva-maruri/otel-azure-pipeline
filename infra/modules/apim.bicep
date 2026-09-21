@@ -110,6 +110,8 @@ resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
   name: 'audit'
   properties: {
     workspaceId: workspaceId
+    // Resource-specific tables (ApiManagementGatewayLogs) instead of AzureDiagnostics.
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       {
         categoryGroup: 'allLogs'
