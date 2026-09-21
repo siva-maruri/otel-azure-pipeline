@@ -28,7 +28,7 @@ flowchart LR
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
 | `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
-| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets |
+| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source |
 | `docs/runbook.md` | What to check when traces stop arriving, the gateway backs up, or APIM rejects senders |
 
 ## Deploy
@@ -38,7 +38,10 @@ az login
 bash scripts/deploy.sh rg-otel-pipeline westus2
 ```
 
-Set `prefix`, `otlpAudience` and `apimPublisherEmail` in `infra/main.bicepparam` first.
+Set `prefix`, `otlpAudience` and `apimPublisherEmail` in `infra/main.bicepparam` first. The
+defaults use Dev SKUs for ADX and APIM to keep a demo cheap; `infra/prod.bicepparam` is the
+same template with SLA-backed SKUs (`bash scripts/deploy.sh <rg> <region>` picks the dev file;
+pass the prod file to `az deployment group create` directly for production).
 The first run is slow, mostly APIM, which takes 30 to 45 minutes to come up inside a VNet.
 The AKS API server is private, so the script installs the collectors with
 `az aks command invoke` instead of a local kubectl.
@@ -94,8 +97,6 @@ auth header and SAS signature are gone. CI runs both.
 
 - The router to gateway hop is plaintext inside the cluster. mTLS would come from a service
   mesh, which is out of scope here.
-- Dev SKUs for ADX and APIM keep a demo affordable but have no SLA.
-- No Event Hubs between the gateway and ADX. Queued ingestion already absorbs bursts; add
-  Event Hubs when you need replay from a stream or a second consumer.
-- telemetry-scrubber isn't wired in yet. The plan is a sidecar on the gateway with its HMAC
-  key in the Key Vault this deploys.
+
+Left out on purpose, with the reasoning in the ADRs: Event Hubs in front of ADX (ADR 3), and
+entropy checks and tokenization in the Collector itself (ADR 5, they happen in the SDK).
