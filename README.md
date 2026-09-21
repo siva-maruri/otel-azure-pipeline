@@ -12,8 +12,8 @@ flowchart LR
     ext[External senders] -- "OTLP/HTTP + Entra token" --> apim[API Management<br/>internal VNet]
     apps[In-cluster apps] -- OTLP/gRPC --> router
     apim --> router[Router collectors<br/>loadbalancing by trace id]
-    router -- traces --> gw[Gateway collectors<br/>scrub + tail sampling]
-    router -- logs, metrics --> gw
+    router -- "traces (mTLS)" --> gw[Gateway collectors<br/>scrub + tail sampling]
+    router -- "logs, metrics (mTLS)" --> gw
     gw -- sampled --> adx[(Azure Data Explorer)]
     gw -- everything --> adls[(ADLS Gen2 archive)]
     kv[Key Vault] -.-> gw
@@ -24,11 +24,11 @@ flowchart LR
 | Path | What it is |
 |---|---|
 | `infra/` | Bicep for the VNet, private DNS, private AKS, ADX, ADLS Gen2, Key Vault, APIM, Log Analytics |
-| `collector/` | Helm values for the router and gateway tiers (open-telemetry/opentelemetry-collector chart) |
+| `collector/` | Helm values for the router and gateway tiers (open-telemetry/opentelemetry-collector chart), cert-manager certificates for mTLS between them |
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
 | `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
-| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source |
+| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager |
 | `docs/runbook.md` | What to check when traces stop arriving, the gateway backs up, or APIM rejects senders |
 
 ## Deploy
@@ -72,6 +72,12 @@ access disabled and are reached over private endpoints. APIM runs in internal mo
 the OTLP front door is only reachable from inside the network. It still needs a public IP
 for its management plane; that's a platform requirement for stv2 VNet injection.
 
+**Mutual TLS between the tiers.** cert-manager runs a private CA in the namespace and issues
+a server certificate to the gateway and a client certificate to the router, rotating both
+before they expire. The gateway has no plaintext listener and rejects clients without a
+certificate from that CA. The router dials gateway pod IPs, so it verifies the certificate
+against the headless service name (`server_name_override`). See ADR 6.
+
 **OTLP/gRPC stays inside.** APIM fronts OTLP/HTTP only. Its gRPC support is limited to the
 self-hosted gateway, and in-cluster senders don't need it anyway.
 
@@ -89,14 +95,18 @@ renders both Helm releases and validates the resulting Collector configs with th
 otelcol-contrib version the pods run (0.161.0).
 
 `scripts/local_test.sh` goes further: it runs the rendered router and gateway configs
-locally with debug exporters in place of ADX and blob storage, sends 32 spans, and checks
-that errors and slow traces survive sampling, all 32 reach the archive pipeline, and the
-auth header and SAS signature are gone. CI runs both.
+locally over mTLS with test certificates and debug exporters in place of ADX and blob storage.
+It checks that the gateway refuses plaintext and certificate-less clients, then sends 32 spans
+and checks that errors and slow traces survive sampling, all 32 reach the archive pipeline,
+and the auth header and SAS signature are gone. CI runs both.
 
 ## Known gaps
 
-- The router to gateway hop is plaintext inside the cluster. mTLS would come from a service
-  mesh, which is out of scope here.
+- Traffic into the router (from APIM over the internal load balancer, and from in-cluster
+  apps) is unencrypted. It never leaves the VNet, APIM has already checked the caller's token,
+  and services scrub before sending (ADR 5), but it isn't TLS. Closing it properly means
+  moving the CA into Key Vault so APIM can trust it for backend validation, since cert-manager's
+  in-cluster CA doesn't exist yet when the Bicep deployment runs.
 
 Left out on purpose, with the reasoning in the ADRs: Event Hubs in front of ADX (ADR 3), and
 entropy checks and tokenization in the Collector itself (ADR 5, they happen in the SDK).
