@@ -1,0 +1,79 @@
+# Router tier: the only thing apps and APIM talk to. Hashes trace ids across the gateway
+# replicas so each trace lands on one gateway, which tail sampling depends on.
+# Installed by scripts/deploy.sh as release "otel-router".
+
+mode: deployment
+replicaCount: 2
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.161.0"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+# Internal load balancer on a fixed IP so APIM has a stable backend (routerIlbIp in Bicep).
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-ipv4: "10.20.3.250"
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+
+  exporters:
+    debug: null
+
+    loadbalancing:
+      routing_key: traceID
+      protocol:
+        otlp:
+          # In-cluster hop. mTLS would come from a mesh; see README.
+          tls:
+            insecure: true
+          sending_queue:
+            enabled: true
+            queue_size: 5000
+      resolver:
+        dns:
+          hostname: otel-gateway-headless.observability.svc.cluster.local
+          port: "4317"
+
+    # Logs and metrics don't need trace affinity, so plain round-robin to the gateway.
+    otlp_grpc/gateway:
+      endpoint: otel-gateway-opentelemetry-collector.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter]
+        exporters: [loadbalancing]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp_grpc/gateway]
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp_grpc/gateway]

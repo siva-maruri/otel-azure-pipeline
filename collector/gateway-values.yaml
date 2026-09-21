@@ -1,0 +1,182 @@
+# Gateway tier: tail sampling, scrubbing, export to ADX (hot) and ADLS Gen2 (archive).
+# Chart: open-telemetry/opentelemetry-collector. Installed by scripts/deploy.sh as release "otel-gateway".
+#
+# Tail sampling needs every span of a trace on the same replica. The router tier
+# (router-values.yaml) guarantees that by hashing trace ids across this headless service.
+
+mode: deployment
+replicaCount: 3
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.161.0"
+
+serviceAccount:
+  create: true
+  name: otel-gateway
+  annotations:
+    # Set at install time from the Bicep output collectorClientId.
+    azure.workload.identity/client-id: ""
+
+podLabels:
+  azure.workload.identity/use: "true"
+
+# Filled in by scripts/deploy.sh from the Bicep outputs.
+extraEnvs:
+  - name: ADX_CLUSTER_URI
+    value: ""
+  - name: ARCHIVE_BLOB_URL
+    value: ""
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 2Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+extraManifests:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: otel-gateway-headless
+    spec:
+      clusterIP: None
+      selector:
+        app.kubernetes.io/name: opentelemetry-collector
+        app.kubernetes.io/instance: otel-gateway
+        component: standalone-collector
+      ports:
+        - name: otlp
+          port: 4317
+          targetPort: 4317
+          protocol: TCP
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+
+  processors:
+    attributes/drop-credentials:
+      actions:
+        - key: http.request.header.authorization
+          action: delete
+        - key: http.request.header.cookie
+          action: delete
+        - key: http.request.header.x-api-key
+          action: delete
+
+    redaction:
+      allow_all_keys: true
+      blocked_values:
+        - "4[0-9]{12}(?:[0-9]{3})?"
+        - "5[1-5][0-9]{14}"
+        - "(?:AKIA|ASIA)[A-Z0-9]{16}"
+      summary: info
+
+    transform/scrub:
+      error_mode: ignore
+      trace_statements:
+        - context: span
+          statements:
+            - replace_pattern(span.attributes["url.full"], "sig=[^&]+", "sig=REDACTED")
+            - replace_pattern(span.attributes["url.query"], "sig=[^&]+", "sig=REDACTED")
+      log_statements:
+        - context: log
+          statements:
+            - replace_pattern(log.body, "(?i)(AccountKey|SharedAccessKey)=[A-Za-z0-9+/=]+", "$$1=REDACTED")
+
+    # Keep every error and every slow trace, 10% of the rest.
+    tail_sampling:
+      decision_wait: 10s
+      num_traces: 200000
+      expected_new_traces_per_sec: 2000
+      policies:
+        - name: keep-errors
+          type: status_code
+          status_code:
+            status_codes: [ERROR]
+        - name: keep-slow
+          type: latency
+          latency:
+            threshold_ms: 1500
+        - name: baseline
+          type: probabilistic
+          probabilistic:
+            sampling_percentage: 10
+
+    batch:
+      send_batch_size: 8192
+      timeout: 2s
+
+  exporters:
+    debug: null
+
+    azuredataexplorer:
+      cluster_uri: ${env:ADX_CLUSTER_URI}
+      # Picks up the workload identity env vars injected by the AKS webhook.
+      use_azure_auth: true
+      db_name: telemetry
+      traces_table_name: OTELTraces
+      logs_table_name: OTELLogs
+      metrics_table_name: OTELMetrics
+      ingestion_type: queued
+      sending_queue:
+        enabled: true
+        num_consumers: 4
+        queue_size: 5000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 60s
+        max_elapsed_time: 10m
+
+    azureblob:
+      url: ${env:ARCHIVE_BLOB_URL}
+      auth:
+        type: workload_identity
+        tenant_id: ${env:AZURE_TENANT_ID}
+        client_id: ${env:AZURE_CLIENT_ID}
+        federated_token_file: ${env:AZURE_FEDERATED_TOKEN_FILE}
+      container:
+        traces: raw-traces
+        logs: raw-logs
+        metrics: raw-metrics
+      format: proto
+
+  service:
+    pipelines:
+      # Hot path: sampled, queryable in ADX within a couple of minutes.
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, attributes/drop-credentials, redaction, transform/scrub, tail_sampling, batch]
+        exporters: [azuredataexplorer]
+      # Archive: every scrubbed span, unsampled, for replays and audits.
+      traces/archive:
+        receivers: [otlp]
+        processors: [memory_limiter, attributes/drop-credentials, redaction, transform/scrub, batch]
+        exporters: [azureblob]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, transform/scrub, batch]
+        exporters: [azuredataexplorer, azureblob]
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [azuredataexplorer]
