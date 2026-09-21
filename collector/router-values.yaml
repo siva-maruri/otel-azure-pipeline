@@ -26,6 +26,16 @@ ports:
   zipkin:
     enabled: false
 
+# Client cert and CA from cert-manager (collector/certs.yaml).
+extraVolumes:
+  - name: tls
+    secret:
+      secretName: otel-router-tls
+extraVolumeMounts:
+  - name: tls
+    mountPath: /etc/otel/tls
+    readOnly: true
+
 # Internal load balancer on a fixed IP so APIM has a stable backend (routerIlbIp in Bicep).
 service:
   type: LoadBalancer
@@ -46,9 +56,12 @@ config:
       routing_key: traceID
       protocol:
         otlp:
-          # In-cluster hop. mTLS would come from a mesh; see README.
           tls:
-            insecure: true
+            ca_file: /etc/otel/tls/ca.crt
+            cert_file: /etc/otel/tls/tls.crt
+            key_file: /etc/otel/tls/tls.key
+            # Resolved endpoints are pod IPs; the gateway cert is issued for the service name.
+            server_name_override: otel-gateway-headless.observability.svc.cluster.local
           sending_queue:
             enabled: true
             queue_size: 5000
@@ -61,7 +74,9 @@ config:
     otlp_grpc/gateway:
       endpoint: otel-gateway-opentelemetry-collector.observability.svc.cluster.local:4317
       tls:
-        insecure: true
+        ca_file: /etc/otel/tls/ca.crt
+        cert_file: /etc/otel/tls/tls.crt
+        key_file: /etc/otel/tls/tls.key
 
   service:
     pipelines:

@@ -1,0 +1,77 @@
+# mTLS between the router and gateway collectors, issued by cert-manager.
+# A private CA that lives in the observability namespace: nothing outside the cluster needs to
+# trust it, and cert-manager rotates the leaf certificates before they expire (90-day certs,
+# renewed at 2/3 of their lifetime). Applied by scripts/deploy.sh before the Helm releases.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+  namespace: observability
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-ca
+  namespace: observability
+spec:
+  isCA: true
+  commonName: otel-internal-ca
+  secretName: otel-ca
+  duration: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: otel-ca
+  namespace: observability
+spec:
+  ca:
+    secretName: otel-ca
+---
+# Server certificate for the gateway. The router dials pod IPs it gets from the headless
+# service, so it verifies against the headless name via server_name_override.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-gateway-tls
+  namespace: observability
+spec:
+  secretName: otel-gateway-tls
+  duration: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages: [server auth]
+  dnsNames:
+    - otel-gateway-headless.observability.svc.cluster.local
+    - otel-gateway-opentelemetry-collector.observability.svc.cluster.local
+  issuerRef:
+    name: otel-ca
+    kind: Issuer
+---
+# Client certificate the router presents. The gateway only accepts connections signed by
+# the same CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-router-tls
+  namespace: observability
+spec:
+  secretName: otel-router-tls
+  duration: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages: [client auth]
+  commonName: otel-router
+  issuerRef:
+    name: otel-ca
+    kind: Issuer

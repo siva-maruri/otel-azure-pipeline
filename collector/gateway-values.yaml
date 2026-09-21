@@ -39,6 +39,16 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 2
 
+# Server cert and CA from cert-manager (collector/certs.yaml).
+extraVolumes:
+  - name: tls
+    secret:
+      secretName: otel-gateway-tls
+extraVolumeMounts:
+  - name: tls
+    mountPath: /etc/otel/tls
+    readOnly: true
+
 ports:
   jaeger-compact:
     enabled: false
@@ -47,6 +57,9 @@ ports:
   jaeger-grpc:
     enabled: false
   zipkin:
+    enabled: false
+  # Only the router talks to the gateway, over mTLS gRPC. No plaintext HTTP listener.
+  otlp-http:
     enabled: false
 
 extraManifests:
@@ -71,6 +84,16 @@ config:
     jaeger: null
     zipkin: null
     prometheus: null
+    otlp:
+      protocols:
+        http: null
+        grpc:
+          tls:
+            cert_file: /etc/otel/tls/tls.crt
+            key_file: /etc/otel/tls/tls.key
+            # Setting a client CA makes the gateway require a client certificate.
+            client_ca_file: /etc/otel/tls/ca.crt
+            min_version: "1.3"
 
   processors:
     attributes/drop-credentials:
