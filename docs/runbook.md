@@ -51,6 +51,17 @@ gateway scales or rolls (see ADR 1). Outside of that, check the router can resol
 headless service. The collector image is distroless, so there's no shell for `nslookup`;
 compare `k get endpoints otel-gateway-headless` with the gateway pod IPs instead.
 
+### Router can't reach the gateway (TLS errors in router logs)
+
+Usually an expired or not-yet-issued certificate, or a gateway pod that started before a
+renewal and still serves the old one.
+
+```bash
+k get certificate                      # all should be READY=True
+k describe certificate otel-gateway-tls
+k rollout restart deploy/otel-gateway-opentelemetry-collector   # picks up renewed files
+```
+
 ### External senders get 401 / 429 from APIM
 
 ```kusto
