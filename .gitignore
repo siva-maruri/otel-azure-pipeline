@@ -1,0 +1,4 @@
+*.json
+!.github/**/*.json
+.env
+*.local.yaml
