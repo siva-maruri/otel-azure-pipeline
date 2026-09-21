@@ -22,6 +22,17 @@ param routerIlbIp string = '10.20.3.250'
 @description('Optional Entra group object id given read access to the ADX database.')
 param adxViewerGroupObjectId string = ''
 
+// Defaults keep a demo affordable. For production, e.g.:
+//   adxSkuName = 'Standard_E8ads_v5', adxSkuTier = 'Standard', adxCapacity = 2
+//   apimSkuName = 'Premium', apimCapacity = 1 (add zones for an SLA)
+param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
+param adxSkuTier string = 'Basic'
+param adxCapacity int = 1
+
+@allowed(['Developer', 'Premium'])
+param apimSkuName string = 'Developer'
+param apimCapacity int = 1
+
 var tags = {
   workload: 'otel-pipeline'
 }
@@ -106,6 +117,9 @@ module adx 'modules/adx.bicep' = {
     collectorClientId: collectorIdentity.properties.clientId
     workspaceId: monitoring.outputs.workspaceId
     viewerGroupObjectId: adxViewerGroupObjectId
+    skuName: adxSkuName
+    skuTier: adxSkuTier
+    capacity: adxCapacity
   }
 }
 
@@ -122,6 +136,8 @@ module apim 'modules/apim.bicep' = {
     otlpAudience: otlpAudience
     routerUrl: 'http://${routerIlbIp}:4318'
     workspaceId: monitoring.outputs.workspaceId
+    skuName: apimSkuName
+    skuCapacity: apimCapacity
   }
 }
 
