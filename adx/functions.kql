@@ -1,0 +1,40 @@
+// Query helpers for on-call. The exporter's exact casing for kind/status has changed
+// between releases, so comparisons accept both the short and the enum-style names.
+
+.create-or-alter function with (folder = "traces", docstring = "All spans of one trace, in start order, for a waterfall view")
+TraceWaterfall(traceId: string) {
+    OTELTraces
+    | where TraceID == traceId
+    | extend Service = tostring(ResourceAttributes["service.name"]), DurationMs = datetime_diff("millisecond", EndTime, StartTime)
+    | project StartTime, DurationMs, Service, SpanName, SpanKind, SpanStatus, SpanStatusMessage, SpanID, ParentID
+    | order by StartTime asc
+}
+
+.create-or-alter function with (folder = "traces", docstring = "Server-side error rate per service in 5 minute bins")
+ServiceErrorRate(lookback: timespan = 1h) {
+    OTELTraces
+    | where StartTime > ago(lookback)
+    | where SpanKind in~ ("Server", "SPAN_KIND_SERVER")
+    | summarize Requests = count(), Errors = countif(SpanStatus in~ ("Error", "STATUS_CODE_ERROR")) by Service = tostring(ResourceAttributes["service.name"]), Bin = bin(StartTime, 5m)
+    | extend ErrorRatePct = round(100.0 * Errors / Requests, 2)
+    | order by Bin asc, Service asc
+}
+
+.create-or-alter function with (folder = "traces", docstring = "p50/p95/p99 server latency by service and route")
+LatencyPercentiles(lookback: timespan = 1h) {
+    OTELTraces
+    | where StartTime > ago(lookback)
+    | where SpanKind in~ ("Server", "SPAN_KIND_SERVER")
+    | extend Service = tostring(ResourceAttributes["service.name"]), Route = tostring(TraceAttributes["http.route"]), DurationMs = datetime_diff("millisecond", EndTime, StartTime)
+    | summarize Requests = count(), p50 = percentile(DurationMs, 50), p95 = percentile(DurationMs, 95), p99 = percentile(DurationMs, 99) by Service, Route
+    | order by p95 desc
+}
+
+.create-or-alter function with (folder = "logs", docstring = "Error logs joined to the span they were emitted from")
+ErrorLogsWithSpans(lookback: timespan = 1h) {
+    OTELLogs
+    | where Timestamp > ago(lookback) and SeverityNumber >= 17
+    | join kind=leftouter (OTELTraces | where StartTime > ago(lookback) | project TraceID, SpanID, SpanName) on TraceID, SpanID
+    | project Timestamp, Service = tostring(ResourceAttributes["service.name"]), SeverityText, Body, SpanName, TraceID
+    | order by Timestamp desc
+}

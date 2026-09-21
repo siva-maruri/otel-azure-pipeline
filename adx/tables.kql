@@ -1,0 +1,22 @@
+// Tables in the shape the azuredataexplorer exporter writes (otelcol-contrib 0.161).
+// Applied by infra/modules/adx.bicep as a database script. Commands are separated by
+// blank lines, so keep each command itself free of empty lines.
+
+.create-merge table OTELTraces (TraceID:string, SpanID:string, ParentID:string, SpanName:string, SpanStatus:string, SpanStatusMessage:string, SpanKind:string, StartTime:datetime, EndTime:datetime, ResourceAttributes:dynamic, TraceAttributes:dynamic, Events:dynamic, Links:dynamic)
+
+.create-merge table OTELLogs (Timestamp:datetime, ObservedTimestamp:datetime, TraceID:string, SpanID:string, SeverityText:string, SeverityNumber:int, Body:string, ResourceAttributes:dynamic, LogsAttributes:dynamic)
+
+.create-merge table OTELMetrics (Timestamp:datetime, MetricName:string, MetricType:string, MetricUnit:string, MetricDescription:string, MetricValue:real, Host:string, ResourceAttributes:dynamic, MetricAttributes:dynamic)
+
+// Traces are the expensive table and mostly queried in the first two weeks.
+.alter-merge table OTELTraces policy retention softdelete = 90d recoverability = disabled
+
+.alter table OTELTraces policy caching hot = 14d
+
+.alter-merge table OTELLogs policy retention softdelete = 30d recoverability = disabled
+
+.alter table OTELLogs policy caching hot = 7d
+
+.alter-merge table OTELMetrics policy retention softdelete = 180d recoverability = disabled
+
+.alter table OTELMetrics policy caching hot = 30d
