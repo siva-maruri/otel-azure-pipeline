@@ -1,0 +1,13 @@
+# Tells the managed Prometheus agents (ama-metrics) to scrape pods in the observability
+# namespace that carry prometheus.io/scrape annotations, i.e. both collector tiers.
+# Applied by scripts/deploy.sh.
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: ama-metrics-settings-configmap
+  namespace: kube-system
+data:
+  schema-version: v1
+  config-version: ver1
+  pod-annotation-based-scraping: |-
+    podannotationnamespaceregex = "observability"

@@ -5,7 +5,32 @@
 # (router-values.yaml) guarantees that by hashing trace ids across this headless service.
 
 mode: deployment
-replicaCount: 3
+# Scales on CPU between 3 and 12 pods. Scale-up is quick; scale-down waits 15 minutes and
+# removes one pod at a time, because every change reshuffles which gateway owns which trace
+# (ADR 1) and traces in flight during a change are sampled on partial data.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 900
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+
+# Internal metrics on :8888, scraped by Azure Monitor managed Prometheus (alerts/).
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8888"
 
 image:
   repository: otel/opentelemetry-collector-contrib

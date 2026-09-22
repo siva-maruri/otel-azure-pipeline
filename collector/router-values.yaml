@@ -3,7 +3,19 @@
 # Installed by scripts/deploy.sh as release "otel-router".
 
 mode: deployment
-replicaCount: 2
+# Stateless, so it can scale freely in both directions.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8888"
 
 image:
   repository: otel/opentelemetry-collector-contrib
