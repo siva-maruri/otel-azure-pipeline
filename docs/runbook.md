@@ -9,6 +9,22 @@ k top pods
 k logs deploy/otel-gateway-opentelemetry-collector --tail=200
 ```
 
+## Alerts
+
+`alerts/collector-rules.yaml` is deployed as an Azure Monitor Prometheus rule group and
+emails the `alertEmail` address. Each alert links to the section below that deals with it.
+
+| Alert | Severity | Section |
+|---|---|---|
+| OtelCollectorMetricsMissing | critical | Traces stop showing up in ADX |
+| OtelNoSpansAccepted | critical | External senders get 401 / 429 from APIM |
+| OtelExporterFailing | critical | Traces stop showing up in ADX |
+| OtelExporterQueueFilling | warning | Gateway memory climbing, spans refused |
+| OtelReceiverRefusingSpans | warning | Gateway memory climbing, spans refused |
+
+To query the same metrics by hand, open the Azure Monitor workspace (`<prefix>-amw`) and use
+PromQL, e.g. `max by (exporter) (otelcol_exporter_queue_size / otelcol_exporter_queue_capacity)`.
+
 ## Symptoms
 
 ### Traces stop showing up in ADX
@@ -30,8 +46,11 @@ k logs deploy/otel-gateway-opentelemetry-collector --tail=200
 
 ### Gateway memory climbing, spans refused
 
-The collector publishes its own metrics on port 8888 (counters carry a `_total` suffix in
-Prometheus). The ones that matter:
+First check whether autoscaling is already at its ceiling: `k get hpa`. The gateway scales
+between 3 and 12 pods on CPU and scales down slowly on purpose (see README).
+
+The collector publishes its own metrics on port 8888, and managed Prometheus scrapes them
+(counter names have no `_total` suffix in collector 0.161). The ones that matter:
 
 | Metric | Meaning |
 |---|---|
