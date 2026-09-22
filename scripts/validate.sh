@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offline checks for everything in the repo. Used by CI, handy before a deploy.
-#   needs: bicep, helm, otelcol-contrib (matching the image tag), python3
+#   needs: bicep, helm, otelcol-contrib (matching the image tag), promtool, python3
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -42,5 +42,10 @@ PY
     otelcol-contrib validate --config="$work/$release-config.yaml"
   echo "   $release: ok"
 done
+
+echo "-- alerts"
+promtool check rules alerts/collector-rules.yaml > /dev/null
+promtool test rules alerts/collector-rules.test.yaml > /dev/null
+echo "   rules valid, unit tests pass"
 
 echo "all checks passed"

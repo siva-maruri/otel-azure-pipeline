@@ -22,7 +22,8 @@ aks="$(out aksName)"
 bundle="$(mktemp -d)"
 trap 'rm -rf "$bundle"' EXIT
 
-cp collector/gateway-values.yaml collector/router-values.yaml collector/certs.yaml "$bundle/"
+cp collector/gateway-values.yaml collector/router-values.yaml collector/certs.yaml \
+  collector/ama-metrics-settings.yaml "$bundle/"
 cat > "$bundle/gateway-overrides.yaml" << YAML
 serviceAccount:
   annotations:
@@ -46,6 +47,7 @@ echo "-- collectors"
       -n cert-manager --create-namespace --set crds.enabled=true --wait &&
     kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f - &&
     kubectl apply -f certs.yaml &&
+    kubectl apply -f ama-metrics-settings.yaml &&
     kubectl -n observability wait --for=condition=Ready --timeout=180s \
       certificate/otel-gateway-tls certificate/otel-router-tls &&
     helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts &&
