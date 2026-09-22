@@ -24,7 +24,7 @@ flowchart LR
 | Path | What it is |
 |---|---|
 | `infra/` | Bicep for the VNet, private DNS, private AKS, ADX, ADLS Gen2, Key Vault, APIM, Log Analytics |
-| `collector/` | Helm values for the router and gateway tiers (open-telemetry/opentelemetry-collector chart), cert-manager certificates for mTLS between them |
+| `collector/` | Helm values for the router and gateway tiers (open-telemetry/opentelemetry-collector chart), cert-manager certificates for mTLS between them, NetworkPolicies, free-trial overlays |
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
 | `alerts/` | Prometheus alert rules on the collectors' own metrics, with promtool unit tests |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
@@ -56,6 +56,18 @@ namespace listed in `OTEL_CLIENT_NAMESPACES` (for the OTel SDKs, mount it and po
 `otel-client=true` label; apps anywhere else can't reach the router.
 
 APIM, ADX and AKS bill by the hour. `bash scripts/teardown.sh <rg>` deletes everything.
+
+To try it on a free account, where the vCPU quota is usually small:
+
+```bash
+DEPLOY_PROFILE=trial bash scripts/deploy.sh rg-otel-trial westus2
+```
+
+That uses `infra/trial.bicepparam` (one 2-vCPU node, cheapest SKUs) and the overlays in
+`collector/trial/`, which shrink the collectors to one replica each so they fit on that node.
+Nothing about the design changes: same mTLS, scrubbing, tail sampling, alerts and policies.
+`validate.sh` renders and validates both profiles, and checks the trial collectors still fit
+on a single node.
 
 External senders need an app registration exposing the `otlpAudience` URI with a
 `Telemetry.Write` app role. Assign that role to each sending app or managed identity.
