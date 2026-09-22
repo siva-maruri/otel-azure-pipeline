@@ -53,6 +53,16 @@ if ! grep -q "azure-load-balancer-ipv4: \"$ilb\"" collector/router-values.yaml \
 fi
 echo "   router IP $ilb matches in Bicep, Helm values and certificate"
 
+# The NetworkPolicy allows the APIM and AKS subnets by range (ADR 8).
+for subnet in apim aks; do
+  cidr="$(grep -A3 "name: '$subnet'" infra/modules/network.bicep | grep -oP "addressPrefix: '\K[0-9./]+")"
+  if ! grep -q "cidr: $cidr" collector/network-policies.yaml; then
+    echo "$subnet subnet ($cidr) must be the range allowed in collector/network-policies.yaml"
+    exit 1
+  fi
+done
+echo "   APIM and AKS subnet ranges match the NetworkPolicy"
+
 echo "-- alerts"
 promtool check rules alerts/collector-rules.yaml > /dev/null
 promtool test rules alerts/collector-rules.test.yaml > /dev/null

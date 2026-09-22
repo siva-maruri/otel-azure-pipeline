@@ -3,8 +3,8 @@
 #   bash scripts/deploy.sh <resource-group> [location]
 # Needs: az (logged in), jq, openssl. First run takes a while: APIM in VNet mode is 30-45
 # minutes, and the second pass (APIM learning the router CA) adds more.
-# OTEL_CLIENT_NAMESPACES: namespaces whose apps send to the router and need its CA
-# (default: "default").
+# OTEL_CLIENT_NAMESPACES: namespaces whose apps send to the router. They get its CA and the
+# otel-client=true label the NetworkPolicy allows (default: "default").
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -31,7 +31,7 @@ bundle="$(mktemp -d)"
 trap 'rm -rf "$bundle"' EXIT
 
 cp collector/gateway-values.yaml collector/router-values.yaml collector/certs.yaml \
-  collector/ama-metrics-settings.yaml "$bundle/"
+  collector/ama-metrics-settings.yaml collector/network-policies.yaml "$bundle/"
 cat > "$bundle/gateway-overrides.yaml" << YAML
 serviceAccount:
   annotations:
@@ -61,6 +61,7 @@ echo "-- collectors"
     kubectl -n observability get secret otel-ca -o jsonpath='{.data.tls\\.crt}' | base64 -d > /tmp/otel-ca.crt &&
     for ns in $client_namespaces; do
       kubectl create namespace \$ns --dry-run=client -o yaml | kubectl apply -f - &&
+      kubectl label namespace \$ns otel-client=true --overwrite &&
       kubectl -n \$ns create configmap otel-ca-bundle --from-file=ca.crt=/tmp/otel-ca.crt \
         --dry-run=client -o yaml | kubectl apply -f - || exit 1
     done &&
@@ -70,7 +71,8 @@ echo "-- collectors"
       -f gateway-values.yaml -f gateway-overrides.yaml --wait &&
     helm upgrade --install otel-router open-telemetry/opentelemetry-collector \
       --version $chart_version -n observability \
-      -f router-values.yaml --wait"
+      -f router-values.yaml --wait &&
+    kubectl apply -f network-policies.yaml"
 )
 
 echo "-- apim trusts the router certificate"
