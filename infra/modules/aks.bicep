@@ -3,6 +3,8 @@ param location string
 param tags object
 param subnetId string
 param nodeCount int
+@description('Cluster autoscaler upper bound for the node pool.')
+param nodeMaxCount int = 6
 param nodeVmSize string
 param collectorIdentityName string
 
@@ -30,6 +32,12 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
     oidcIssuerProfile: {
       enabled: true
     }
+    // Managed Prometheus: the ama-metrics agents scrape the collectors' :8888 endpoints.
+    azureMonitorProfile: {
+      metrics: {
+        enabled: true
+      }
+    }
     securityProfile: {
       workloadIdentity: {
         enabled: true
@@ -42,6 +50,10 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
         osType: 'Linux'
         type: 'VirtualMachineScaleSets'
         count: nodeCount
+        // Node autoscaling, so collector autoscaling has somewhere to put new pods.
+        enableAutoScaling: true
+        minCount: nodeCount
+        maxCount: nodeMaxCount
         vmSize: nodeVmSize
         vnetSubnetID: subnetId
         availabilityZones: ['1', '2', '3']
