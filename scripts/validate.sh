@@ -43,6 +43,16 @@ PY
   echo "   $release: ok"
 done
 
+echo "-- consistency"
+# The router's internal load balancer IP lives in three places (ADR 7); they must agree.
+ilb="$(grep -oP "param routerIlbIp string = '\K[0-9.]+" infra/main.bicep)"
+if ! grep -q "azure-load-balancer-ipv4: \"$ilb\"" collector/router-values.yaml \
+  || ! grep -q -- "- $ilb" collector/certs.yaml; then
+  echo "routerIlbIp ($ilb) must match collector/router-values.yaml and collector/certs.yaml"
+  exit 1
+fi
+echo "   router IP $ilb matches in Bicep, Helm values and certificate"
+
 echo "-- alerts"
 promtool check rules alerts/collector-rules.yaml > /dev/null
 promtool test rules alerts/collector-rules.test.yaml > /dev/null

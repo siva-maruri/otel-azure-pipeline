@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Deploy the Azure resources, then install the router and gateway collectors.
 #   bash scripts/deploy.sh <resource-group> [location]
-# Needs: az (logged in), jq. First run takes a while: APIM in VNet mode is 30-45 minutes.
+# Needs: az (logged in), jq, openssl. First run takes a while: APIM in VNet mode is 30-45
+# minutes, and the second pass (APIM learning the router CA) adds more.
+# OTEL_CLIENT_NAMESPACES: namespaces whose apps send to the router and need its CA
+# (default: "default").
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -9,12 +12,17 @@ rg="${1:?usage: deploy.sh <resource-group> [location]}"
 location="${2:-westus2}"
 chart_version="${CHART_VERSION:-0.173.1}"
 cert_manager_version="${CERT_MANAGER_VERSION:-v1.15.3}"
+client_namespaces="${OTEL_CLIENT_NAMESPACES:-default}"
 
 az group create -n "$rg" -l "$location" -o none
 
 echo "-- infra"
+# On a rerun, keep the router CA from the last run so APIM never drops back to plain HTTP
+# while the first pass redeploys it.
+prev_ca="$(az deployment group show -g "$rg" -n otel-pipeline-router-trust \
+  --query properties.parameters.routerCaCertificate.value -o tsv 2>/dev/null || true)"
 outputs="$(az deployment group create -g "$rg" -n otel-pipeline \
-  -f infra/main.bicep -p infra/main.bicepparam \
+  -f infra/main.bicep -p infra/main.bicepparam -p routerCaCertificate="$prev_ca" \
   --query properties.outputs -o json)"
 out() { jq -r ".$1.value" <<< "$outputs"; }
 
@@ -49,7 +57,13 @@ echo "-- collectors"
     kubectl apply -f certs.yaml &&
     kubectl apply -f ama-metrics-settings.yaml &&
     kubectl -n observability wait --for=condition=Ready --timeout=180s \
-      certificate/otel-gateway-tls certificate/otel-router-tls &&
+      certificate/otel-gateway-tls certificate/otel-router-tls certificate/otel-router-server-tls &&
+    kubectl -n observability get secret otel-ca -o jsonpath='{.data.tls\\.crt}' | base64 -d > /tmp/otel-ca.crt &&
+    for ns in $client_namespaces; do
+      kubectl create namespace \$ns --dry-run=client -o yaml | kubectl apply -f - &&
+      kubectl -n \$ns create configmap otel-ca-bundle --from-file=ca.crt=/tmp/otel-ca.crt \
+        --dry-run=client -o yaml | kubectl apply -f - || exit 1
+    done &&
     helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts &&
     helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
       --version $chart_version -n observability --create-namespace \
@@ -59,6 +73,16 @@ echo "-- collectors"
       -f router-values.yaml --wait"
 )
 
+echo "-- apim trusts the router certificate"
+# The router's certificate comes from the in-cluster CA, which only exists now. Hand its
+# public certificate to APIM so it can verify the router, and switch the backend to HTTPS.
+ca_der="$(az aks command invoke -g "$rg" -n "$aks" -o json \
+  --command "kubectl -n observability get secret otel-ca -o jsonpath='{.data.tls\\.crt}'" \
+  | jq -r .logs | base64 -d | openssl x509 -outform der | base64 | tr -d '\n')"
+az deployment group create -g "$rg" -n otel-pipeline-router-trust \
+  -f infra/main.bicep -p infra/main.bicepparam -p routerCaCertificate="$ca_der" -o none
+
 echo
 echo "APIM gateway (private): $(out apimGatewayUrl)/otlp/v1/traces"
-echo "In-cluster OTLP:        otel-router-opentelemetry-collector.observability:4317"
+echo "In-cluster OTLP (TLS):  otel-router-opentelemetry-collector.observability.svc:4317"
+echo "Apps verify it with the otel-ca-bundle ConfigMap in: $client_namespaces"
