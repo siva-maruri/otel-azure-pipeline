@@ -28,8 +28,8 @@ flowchart LR
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
 | `alerts/` | Prometheus alert rules on the collectors' own metrics, with promtool unit tests |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
-| `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
-| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager, TLS into the router |
+| `scripts/` | `deploy.sh`, `teardown.sh`, `validate.sh`, `local_test.sh`, `policy_test.sh`, `send_test_span.sh` |
+| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager, TLS into the router, who may connect |
 | `docs/runbook.md` | What to check when traces stop arriving, the gateway backs up, or APIM rejects senders |
 
 ## Deploy
@@ -52,7 +52,8 @@ is running in the cluster (ADR 7).
 Apps in the cluster send to `otel-router-opentelemetry-collector.observability.svc:4317` over
 TLS and verify it with the `otel-ca-bundle` ConfigMap, which the script creates in each
 namespace listed in `OTEL_CLIENT_NAMESPACES` (for the OTel SDKs, mount it and point
-`OTEL_EXPORTER_OTLP_CERTIFICATE` at `ca.crt`).
+`OTEL_EXPORTER_OTLP_CERTIFICATE` at `ca.crt`). Those namespaces also get the
+`otel-client=true` label; apps anywhere else can't reach the router.
 
 APIM, ADX and AKS bill by the hour. `bash scripts/teardown.sh <rg>` deletes everything.
 
@@ -106,6 +107,14 @@ against the headless service name (`server_name_override`). See ADR 6.
 certificate against the cluster CA; apps use the CA bundle), the router reaches the gateway
 over mutual TLS, and the router's certificate reloads itself when cert-manager renews it.
 
+**Only known senders get through.** NetworkPolicies allow the router to hear from labelled
+namespaces and from the APIM subnet (the router's load balancer keeps the caller's source
+address for exactly this), and the gateway to hear only from the router. Metrics scraping and
+kubelet probes are allowed on their own ports and nothing else. `scripts/policy_test.sh`
+proves it offline: it renders the real Helm releases, adds an allowed namespace, a
+disallowed one and the metrics agent, and requires the analyzed connectivity to the
+collectors to match an exact list. Loosening a rule or dropping the policies fails it.
+
 **Monitoring stays private too.** The metrics agents send to Azure Monitor through an Azure
 Monitor Private Link Scope with ingestion set to private-only, and the data collection
 endpoint refuses public traffic. Querying stays open so the portal and Grafana work.
@@ -124,7 +133,8 @@ numbers and AWS keys are masked by the `redaction` processor, SAS signatures by 
 
 `scripts/validate.sh` builds and lints the Bicep, checks the APIM policy is well-formed,
 renders both Helm releases and validates the resulting Collector configs with the same
-otelcol-contrib version the pods run (0.161.0), then checks the alert rules and runs their
+otelcol-contrib version the pods run (0.161.0), checks that the router IP and subnet ranges agree
+across Bicep, Helm values, certificates and policies, then checks the alert rules and runs their
 promtool unit tests. The alert tests are themselves checked: loosening the exporter-failure
 threshold makes them fail.
 
@@ -139,10 +149,8 @@ and the auth header and SAS signature are gone. CI runs both.
 - Never deployed to a live subscription. Everything above is validated offline: templates
   build and lint, collector configs pass the official validator, alert rules pass their unit
   tests, and the local test runs the real configs over TLS. A first real deployment will
-  likely need small fixes; the two-pass APIM trust step and private-link DNS are the parts
-  most likely to.
-- In-cluster senders are encrypted but not authenticated: any pod that can reach the router
-  can send. A NetworkPolicy limiting which namespaces reach it is the next hardening step.
+  likely need small fixes; the two-pass APIM trust step, private-link DNS, and APIM's source
+  address surviving the load balancer (ADR 8) are the parts most likely to.
 
 Left out on purpose, with the reasoning in the ADRs: Event Hubs in front of ADX (ADR 3), and
 entropy checks and tokenization in the Collector itself (ADR 5, they happen in the SDK).
