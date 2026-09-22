@@ -10,18 +10,22 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OTELCOL_VERSION: "0.161.0"
+      PROMETHEUS_VERSION: "3.5.0"
     steps:
       - uses: actions/checkout@v4
 
       - uses: azure/setup-helm@v4
 
-      - name: Install bicep and otelcol-contrib
+      - name: Install bicep, otelcol-contrib and promtool
         run: |
           curl -sSLo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
           sudo install bicep /usr/local/bin/bicep
           curl -sSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTELCOL_VERSION}/otelcol-contrib_${OTELCOL_VERSION}_linux_amd64.tar.gz" \
             | tar xz otelcol-contrib
           sudo install otelcol-contrib /usr/local/bin/otelcol-contrib
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo install promtool /usr/local/bin/promtool
           pip install pyyaml
 
       - run: bash scripts/validate.sh
