@@ -7,6 +7,8 @@ param publisherName string
 param tenantId string
 param otlpAudience string
 param routerUrl string
+@description('Base64 DER of the CA that signs the router certificate. Empty on the first deployment pass.')
+param routerCaCertificate string = ''
 param workspaceId string
 
 @allowed(['Developer', 'Premium'])
@@ -41,6 +43,16 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
+    // The router's certificate comes from the in-cluster CA (cert-manager), which doesn't
+    // exist until after the first pass; deploy.sh reads it and redeploys with it here.
+    certificates: empty(routerCaCertificate)
+      ? []
+      : [
+          {
+            encodedCertificate: routerCaCertificate
+            storeName: 'Root'
+          }
+        ]
     virtualNetworkType: 'Internal'
     virtualNetworkConfiguration: {
       subnetResourceId: subnetId

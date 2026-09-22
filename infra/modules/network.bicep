@@ -84,6 +84,11 @@ var zoneNames = {
   table: 'privatelink.table.${environment().suffixes.storage}'
   vault: 'privatelink.vaultcore.azure.net'
   kusto: 'privatelink.${location}.kusto.windows.net'
+  // Azure Monitor Private Link Scope (managed Prometheus ingestion).
+  monitor: 'privatelink.monitor.azure.com'
+  oms: 'privatelink.oms.opinsights.azure.com'
+  ods: 'privatelink.ods.opinsights.azure.com'
+  agentsvc: 'privatelink.agentsvc.azure-automation.net'
 }
 
 resource zones 'Microsoft.Network/privateDnsZones@2020-06-01' = [

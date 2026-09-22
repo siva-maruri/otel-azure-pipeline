@@ -5,6 +5,9 @@ param location string
 param tags object
 param aksName string
 param alertEmail string
+param endpointSubnetId string
+@description('Private DNS zones for the Azure Monitor Private Link Scope endpoint.')
+param amplsZoneIds array
 
 resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' existing = {
   name: aksName
@@ -21,7 +24,11 @@ resource dce 'Microsoft.Insights/dataCollectionEndpoints@2023-03-11' = {
   location: location
   tags: tags
   kind: 'Linux'
-  properties: {}
+  properties: {
+    networkAcls: {
+      publicNetworkAccess: 'Disabled'
+    }
+  }
 }
 
 resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
@@ -71,6 +78,52 @@ resource dceAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2023-
   properties: {
     dataCollectionEndpointId: dce.id
   }
+}
+
+// Private ingestion: the metrics agents in the VNet reach both endpoints (the cluster's
+// configuration endpoint and the workspace's ingestion endpoint) through a private endpoint.
+// PrivateOnly ingestion means agents in the VNet can't fall back to public endpoints. Query
+// stays open so the portal and Grafana still work from outside.
+resource ampls 'Microsoft.Insights/privateLinkScopes@2021-07-01-preview' = {
+  name: '${prefix}-ampls'
+  location: 'global'
+  tags: tags
+  properties: {
+    accessModeSettings: {
+      ingestionAccessMode: 'PrivateOnly'
+      queryAccessMode: 'Open'
+    }
+  }
+}
+
+resource amplsConfigEndpoint 'Microsoft.Insights/privateLinkScopes/scopedResources@2021-07-01-preview' = {
+  parent: ampls
+  name: 'prometheus-config'
+  properties: {
+    linkedResourceId: dce.id
+  }
+}
+
+resource amplsIngestionEndpoint 'Microsoft.Insights/privateLinkScopes/scopedResources@2021-07-01-preview' = {
+  parent: ampls
+  name: 'prometheus-ingestion'
+  properties: {
+    linkedResourceId: workspace.properties.defaultIngestionSettings.dataCollectionEndpointResourceId
+  }
+}
+
+module amplsPrivateEndpoint 'private-endpoint.bicep' = {
+  name: 'ampls-pe'
+  params: {
+    name: '${prefix}-ampls-pe'
+    location: location
+    tags: tags
+    subnetId: endpointSubnetId
+    targetId: ampls.id
+    groupId: 'azuremonitor'
+    zoneIds: amplsZoneIds
+  }
+  dependsOn: [amplsConfigEndpoint, amplsIngestionEndpoint]
 }
 
 resource oncall 'Microsoft.Insights/actionGroups@2023-01-01' = {
