@@ -1,0 +1,60 @@
+# Alerts on the collectors' own metrics (port 8888, scraped by Azure Monitor managed
+# Prometheus). This file is the single source: promtool tests it in CI, and
+# infra/modules/prometheus.bicep deploys it as an Azure prometheusRuleGroup.
+# Metric names are as collector 0.161 exposes them, without a _total suffix on counters.
+groups:
+  - name: otel-collector
+    rules:
+      - alert: OtelCollectorMetricsMissing
+        expr: absent(otelcol_process_uptime)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: No collector is reporting metrics
+          description: Either every collector is down or scraping is broken. Both mean telemetry is flying blind.
+          runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+
+      - alert: OtelNoSpansAccepted
+        expr: sum(rate(otelcol_receiver_accepted_spans[15m])) == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Collectors are up but no spans have arrived for 15 minutes
+          description: Check APIM for rejected senders and the router logs for receiver errors.
+          runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#external-senders-get-401--429-from-apim
+
+      - alert: OtelExporterQueueFilling
+        expr: max by (exporter) (otelcol_exporter_queue_size / otelcol_exporter_queue_capacity) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Exporter {{ $labels.exporter }} queue is over 80% full"
+          description: The backend is slow or unreachable. Scaling the collectors won't help; check the backend first.
+          runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
+
+      - alert: OtelExporterFailing
+        expr: |
+          sum by (exporter) (rate(otelcol_exporter_send_failed_spans[5m]))
+            /
+          (sum by (exporter) (rate(otelcol_exporter_sent_spans[5m])) + sum by (exporter) (rate(otelcol_exporter_send_failed_spans[5m])))
+            > 0.01
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Exporter {{ $labels.exporter }} is dropping more than 1% of spans"
+          description: Spans that exhaust retries are lost. For the ADX exporter, check identity and .show ingestion failures.
+          runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+
+      - alert: OtelReceiverRefusingSpans
+        expr: sum by (receiver) (rate(otelcol_receiver_refused_spans[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Receiver {{ $labels.receiver }} is refusing spans"
+          description: Usually memory_limiter pushing back because an exporter queue is backed up.
+          runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused

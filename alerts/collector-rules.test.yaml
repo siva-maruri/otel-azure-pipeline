@@ -1,0 +1,120 @@
+# promtool test rules alerts/collector-rules.test.yaml
+rule_files:
+  - collector-rules.yaml
+evaluation_interval: 1m
+
+tests:
+  # Healthy traffic: nothing fires.
+  - interval: 1m
+    input_series:
+      - series: otelcol_process_uptime{pod="gw-0"}
+        values: 0+60x40
+      - series: otelcol_receiver_accepted_spans{receiver="otlp", pod="gw-0"}
+        values: 0+6000x40
+      - series: otelcol_exporter_queue_size{exporter="azuredataexplorer", pod="gw-0"}
+        values: 10x40
+      - series: otelcol_exporter_queue_capacity{exporter="azuredataexplorer", pod="gw-0"}
+        values: 1000x40
+      - series: otelcol_exporter_sent_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0+6000x40
+      - series: otelcol_exporter_send_failed_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0x40
+      - series: otelcol_receiver_refused_spans{receiver="otlp", pod="gw-0"}
+        values: 0x40
+    alert_rule_test:
+      - {eval_time: 35m, alertname: OtelCollectorMetricsMissing, exp_alerts: []}
+      - {eval_time: 35m, alertname: OtelNoSpansAccepted, exp_alerts: []}
+      - {eval_time: 35m, alertname: OtelExporterQueueFilling, exp_alerts: []}
+      - {eval_time: 35m, alertname: OtelExporterFailing, exp_alerts: []}
+      - {eval_time: 35m, alertname: OtelReceiverRefusingSpans, exp_alerts: []}
+
+  # No collector metrics at all.
+  - interval: 1m
+    input_series:
+      - series: some_other_metric
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: OtelCollectorMetricsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: OtelCollectorMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: No collector is reporting metrics
+              description: Either every collector is down or scraping is broken. Both mean telemetry is flying blind.
+              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+
+  # Traffic stops: the counter stays flat.
+  - interval: 1m
+    input_series:
+      - series: otelcol_receiver_accepted_spans{receiver="otlp", pod="gw-0"}
+        values: 0+6000x10 60000x60
+    alert_rule_test:
+      - {eval_time: 20m, alertname: OtelNoSpansAccepted, exp_alerts: []}
+      - eval_time: 45m
+        alertname: OtelNoSpansAccepted
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Collectors are up but no spans have arrived for 15 minutes
+              description: Check APIM for rejected senders and the router logs for receiver errors.
+              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#external-senders-get-401--429-from-apim
+
+  # ADX slow: queue climbs past 80%, and 5% of sends fail.
+  - interval: 1m
+    input_series:
+      - series: otelcol_exporter_queue_size{exporter="azuredataexplorer", pod="gw-0"}
+        values: 900x30
+      - series: otelcol_exporter_queue_capacity{exporter="azuredataexplorer", pod="gw-0"}
+        values: 1000x30
+      - series: otelcol_exporter_sent_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0+950x30
+      - series: otelcol_exporter_send_failed_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0+50x30
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OtelExporterQueueFilling
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OtelExporterQueueFilling
+        exp_alerts:
+          - exp_labels: {severity: warning, exporter: azuredataexplorer}
+            exp_annotations:
+              summary: Exporter azuredataexplorer queue is over 80% full
+              description: The backend is slow or unreachable. Scaling the collectors won't help; check the backend first.
+              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
+      - eval_time: 20m
+        alertname: OtelExporterFailing
+        exp_alerts:
+          - exp_labels: {severity: critical, exporter: azuredataexplorer}
+            exp_annotations:
+              summary: Exporter azuredataexplorer is dropping more than 1% of spans
+              description: Spans that exhaust retries are lost. For the ADX exporter, check identity and .show ingestion failures.
+              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+
+  # A 0.5% failure rate stays under the threshold.
+  - interval: 1m
+    input_series:
+      - series: otelcol_exporter_sent_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0+995x30
+      - series: otelcol_exporter_send_failed_spans{exporter="azuredataexplorer", pod="gw-0"}
+        values: 0+5x30
+    alert_rule_test:
+      - {eval_time: 25m, alertname: OtelExporterFailing, exp_alerts: []}
+
+  # memory_limiter pushing back on the receiver.
+  - interval: 1m
+    input_series:
+      - series: otelcol_receiver_refused_spans{receiver="otlp", pod="gw-1"}
+        values: 0+200x30
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OtelReceiverRefusingSpans
+        exp_alerts:
+          - exp_labels: {severity: warning, receiver: otlp}
+            exp_annotations:
+              summary: Receiver otlp is refusing spans
+              description: Usually memory_limiter pushing back because an exporter queue is backed up.
+              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
