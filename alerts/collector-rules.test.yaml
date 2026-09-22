@@ -44,7 +44,7 @@ tests:
             exp_annotations:
               summary: No collector is reporting metrics
               description: Either every collector is down or scraping is broken. Both mean telemetry is flying blind.
-              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+              runbook_url: https://github.com/siva-maruri/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
 
   # Traffic stops: the counter stays flat.
   - interval: 1m
@@ -60,7 +60,7 @@ tests:
             exp_annotations:
               summary: Collectors are up but no spans have arrived for 15 minutes
               description: Check APIM for rejected senders and the router logs for receiver errors.
-              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#external-senders-get-401--429-from-apim
+              runbook_url: https://github.com/siva-maruri/otel-azure-pipeline/blob/main/docs/runbook.md#external-senders-get-401--429-from-apim
 
   # ADX slow: queue climbs past 80%, and 5% of sends fail.
   - interval: 1m
@@ -84,7 +84,7 @@ tests:
             exp_annotations:
               summary: Exporter azuredataexplorer queue is over 80% full
               description: The backend is slow or unreachable. Scaling the collectors won't help; check the backend first.
-              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
+              runbook_url: https://github.com/siva-maruri/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
       - eval_time: 20m
         alertname: OtelExporterFailing
         exp_alerts:
@@ -92,7 +92,7 @@ tests:
             exp_annotations:
               summary: Exporter azuredataexplorer is dropping more than 1% of spans
               description: Spans that exhaust retries are lost. For the ADX exporter, check identity and .show ingestion failures.
-              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
+              runbook_url: https://github.com/siva-maruri/otel-azure-pipeline/blob/main/docs/runbook.md#traces-stop-showing-up-in-adx
 
   # A 0.5% failure rate stays under the threshold.
   - interval: 1m
@@ -117,4 +117,4 @@ tests:
             exp_annotations:
               summary: Receiver otlp is refusing spans
               description: Usually memory_limiter pushing back because an exporter queue is backed up.
-              runbook_url: https://github.com/siva8537853-blip/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
+              runbook_url: https://github.com/siva-maruri/otel-azure-pipeline/blob/main/docs/runbook.md#gateway-memory-climbing-spans-refused
