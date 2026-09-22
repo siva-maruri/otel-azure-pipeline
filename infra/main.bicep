@@ -13,7 +13,12 @@ param otlpAudience string
 param apimPublisherEmail string
 param apimPublisherName string = 'Telemetry platform'
 
+@description('Where collector alerts are emailed.')
+param alertEmail string
+
 param aksNodeCount int = 3
+@description('Upper bound for node autoscaling.')
+param aksNodeMaxCount int = 6
 param aksNodeVmSize string = 'Standard_D4ds_v5'
 
 @description('Static internal IP for the router service. Must sit inside the AKS subnet (10.20.0.0/22).')
@@ -69,8 +74,20 @@ module aks 'modules/aks.bicep' = {
     tags: tags
     subnetId: network.outputs.aksSubnetId
     nodeCount: aksNodeCount
+    nodeMaxCount: aksNodeMaxCount
     nodeVmSize: aksNodeVmSize
     collectorIdentityName: collectorIdentity.name
+  }
+}
+
+module prometheus 'modules/prometheus.bicep' = {
+  name: 'prometheus'
+  params: {
+    prefix: prefix
+    location: location
+    tags: tags
+    aksName: aks.outputs.name
+    alertEmail: alertEmail
   }
 }
 
