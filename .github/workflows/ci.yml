@@ -11,6 +11,8 @@ jobs:
     env:
       OTELCOL_VERSION: "0.161.0"
       PROMETHEUS_VERSION: "3.5.0"
+      NETPOL_ANALYZER_VERSION: "v1.4.4"
+      KUBECONFORM_VERSION: "v0.8.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -31,5 +33,19 @@ jobs:
       - run: bash scripts/validate.sh
 
       - run: bash scripts/local_test.sh
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install netpol-analyzer and kubeconform
+        run: |
+          go install "github.com/np-guard/netpol-analyzer/cmd/netpolicy@${NETPOL_ANALYZER_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo install kubeconform /usr/local/bin/kubeconform
+
+      - run: bash scripts/policy_test.sh
 
       - run: shellcheck scripts/*.sh
