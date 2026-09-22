@@ -24,6 +24,9 @@ param aksNodeVmSize string = 'Standard_D4ds_v5'
 @description('Static internal IP for the router service. Must sit inside the AKS subnet (10.20.0.0/22).')
 param routerIlbIp string = '10.20.3.250'
 
+@description('Set by scripts/deploy.sh on its second pass: the CA behind the router certificate, so APIM talks to the router over verified HTTPS.')
+param routerCaCertificate string = ''
+
 @description('Optional Entra group object id given read access to the ADX database.')
 param adxViewerGroupObjectId string = ''
 
@@ -88,6 +91,14 @@ module prometheus 'modules/prometheus.bicep' = {
     tags: tags
     aksName: aks.outputs.name
     alertEmail: alertEmail
+    endpointSubnetId: network.outputs.endpointSubnetId
+    amplsZoneIds: [
+      network.outputs.zoneIds.monitor
+      network.outputs.zoneIds.oms
+      network.outputs.zoneIds.ods
+      network.outputs.zoneIds.agentsvc
+      network.outputs.zoneIds.blob
+    ]
   }
 }
 
@@ -151,7 +162,8 @@ module apim 'modules/apim.bicep' = {
     publisherName: apimPublisherName
     tenantId: subscription().tenantId
     otlpAudience: otlpAudience
-    routerUrl: 'http://${routerIlbIp}:4318'
+    routerUrl: '${empty(routerCaCertificate) ? 'http' : 'https'}://${routerIlbIp}:4318'
+    routerCaCertificate: routerCaCertificate
     workspaceId: monitoring.outputs.workspaceId
     skuName: apimSkuName
     skuCapacity: apimCapacity
