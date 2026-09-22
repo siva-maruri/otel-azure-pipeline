@@ -82,6 +82,18 @@ k describe certificate otel-gateway-tls
 k rollout restart deploy/otel-gateway-opentelemetry-collector   # picks up renewed files
 ```
 
+### An app in the cluster can't reach the router (connection timeouts)
+
+The NetworkPolicy only lets in namespaces labelled `otel-client=true`. A timeout rather than
+a TLS error is the sign.
+
+```bash
+az aks command invoke -g "$RG" -n "$AKS" --command "kubectl get ns -L otel-client"
+```
+
+Add the namespace to `OTEL_CLIENT_NAMESPACES` and rerun deploy.sh (which also gives it the CA
+bundle), or label it by hand.
+
 ### External senders get 401 / 429 from APIM
 
 ```kusto
