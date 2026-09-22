@@ -9,7 +9,7 @@ AWS keys, SAS signatures, credential headers). They can't do entropy checks or k
 tokenization: OTTL has no notion of a secret key, and a custom collector build just for
 this would be ours to maintain forever.
 
-[telemetry-scrubber](https://github.com/siva8537853-blip/telemetry-scrubber) does both, as
+[telemetry-scrubber](https://github.com/siva-maruri/telemetry-scrubber) does both, as
 exporter wrappers for spans and log records.
 
 ## Decision
