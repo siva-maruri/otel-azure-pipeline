@@ -29,7 +29,7 @@ flowchart LR
 | `alerts/` | Prometheus alert rules on the collectors' own metrics, with promtool unit tests |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
 | `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
-| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager |
+| `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager, TLS into the router |
 | `docs/runbook.md` | What to check when traces stop arriving, the gateway backs up, or APIM rejects senders |
 
 ## Deploy
@@ -45,7 +45,16 @@ same template with SLA-backed SKUs (`bash scripts/deploy.sh <rg> <region>` picks
 pass the prod file to `az deployment group create` directly for production).
 The first run is slow, mostly APIM, which takes 30 to 45 minutes to come up inside a VNet.
 The AKS API server is private, so the script installs the collectors with
-`az aks command invoke` instead of a local kubectl.
+`az aks command invoke` instead of a local kubectl. It deploys the Bicep twice: the second
+pass gives APIM the CA behind the router's certificate, which only exists once cert-manager
+is running in the cluster (ADR 7).
+
+Apps in the cluster send to `otel-router-opentelemetry-collector.observability.svc:4317` over
+TLS and verify it with the `otel-ca-bundle` ConfigMap, which the script creates in each
+namespace listed in `OTEL_CLIENT_NAMESPACES` (for the OTel SDKs, mount it and point
+`OTEL_EXPORTER_OTLP_CERTIFICATE` at `ca.crt`).
+
+APIM, ADX and AKS bill by the hour. `bash scripts/teardown.sh <rg>` deletes everything.
 
 External senders need an app registration exposing the `otlpAudience` URI with a
 `Telemetry.Write` app role. Assign that role to each sending app or managed identity.
@@ -93,6 +102,14 @@ before they expire. The gateway has no plaintext listener and rejects clients wi
 certificate from that CA. The router dials gateway pod IPs, so it verifies the certificate
 against the headless service name (`server_name_override`). See ADR 6.
 
+**Encrypted on every hop.** Senders reach the router over TLS (APIM verifies the router's
+certificate against the cluster CA; apps use the CA bundle), the router reaches the gateway
+over mutual TLS, and the router's certificate reloads itself when cert-manager renews it.
+
+**Monitoring stays private too.** The metrics agents send to Azure Monitor through an Azure
+Monitor Private Link Scope with ingestion set to private-only, and the data collection
+endpoint refuses public traffic. Querying stays open so the portal and Grafana work.
+
 **OTLP/gRPC stays inside.** APIM fronts OTLP/HTTP only. Its gRPC support is limited to the
 self-hosted gateway, and in-cluster senders don't need it anyway.
 
@@ -119,17 +136,13 @@ and the auth header and SAS signature are gone. CI runs both.
 
 ## Known gaps
 
-- Traffic into the router (from APIM over the internal load balancer, and from in-cluster
-  apps) is unencrypted. It never leaves the VNet, APIM has already checked the caller's token,
-  and services scrub before sending (ADR 5), but it isn't TLS. Closing it properly means
-  moving the CA into Key Vault so APIM can trust it for backend validation, since cert-manager's
-  in-cluster CA doesn't exist yet when the Bicep deployment runs.
-- Collector metrics reach Azure Monitor through its public ingestion endpoints (over the
-  Microsoft network, authenticated, but not a private endpoint). Keeping that private needs
-  an Azure Monitor Private Link Scope, which isn't set up here.
 - Never deployed to a live subscription. Everything above is validated offline: templates
-  build and lint, collector configs pass the official validator, and the local test runs the
-  real configs. A first real deployment will likely need small fixes.
+  build and lint, collector configs pass the official validator, alert rules pass their unit
+  tests, and the local test runs the real configs over TLS. A first real deployment will
+  likely need small fixes; the two-pass APIM trust step and private-link DNS are the parts
+  most likely to.
+- In-cluster senders are encrypted but not authenticated: any pod that can reach the router
+  can send. A NetworkPolicy limiting which namespaces reach it is the next hardening step.
 
 Left out on purpose, with the reasoning in the ADRs: Event Hubs in front of ADX (ADR 3), and
 entropy checks and tokenization in the Collector itself (ADR 5, they happen in the SDK).
