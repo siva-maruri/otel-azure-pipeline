@@ -1,0 +1,77 @@
+# Who may connect to the collectors. Applied by scripts/deploy.sh; checked offline by
+# scripts/policy_test.sh.
+#
+# APIM's traffic arrives through the router's internal load balancer. The router Service
+# uses externalTrafficPolicy: Local, so that traffic keeps its source address (the APIM
+# subnet) instead of being rewritten to a node address, and can be matched with an ipBlock.
+# Kubelet health probes come from the node; Cilium already allows node-to-pod traffic, and
+# the node subnet is listed for the health port so the policy doesn't depend on that.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-router-ingress
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: otel-router
+  policyTypes: [Ingress]
+  ingress:
+    # Apps in namespaces labelled otel-client=true (deploy.sh labels OTEL_CLIENT_NAMESPACES).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              otel-client: "true"
+      ports:
+        - {port: 4317, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+    # APIM (apim subnet in infra/modules/network.bicep). OTLP/HTTP only.
+    - from:
+        - ipBlock:
+            cidr: 10.20.4.0/27
+      ports:
+        - {port: 4318, protocol: TCP}
+    # Managed Prometheus agents scraping internal metrics.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 8888, protocol: TCP}
+    # Kubelet health probes (aks subnet).
+    - from:
+        - ipBlock:
+            cidr: 10.20.0.0/22
+      ports:
+        - {port: 13133, protocol: TCP}
+---
+# The gateway only ever hears from the router. mTLS already rejects anyone else at the
+# handshake; this stops them before they get that far.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-gateway-ingress
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: otel-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: otel-router
+      ports:
+        - {port: 4317, protocol: TCP}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 8888, protocol: TCP}
+    - from:
+        - ipBlock:
+            cidr: 10.20.0.0/22
+      ports:
+        - {port: 13133, protocol: TCP}

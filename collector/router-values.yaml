@@ -58,6 +58,9 @@ extraVolumeMounts:
 # Internal load balancer on a fixed IP so APIM has a stable backend (routerIlbIp in Bicep).
 service:
   type: LoadBalancer
+  # Keeps the caller's source address, so collector/network-policies.yaml can tell APIM's
+  # traffic apart. The load balancer only sends to nodes running a router pod.
+  externalTrafficPolicy: Local
   annotations:
     service.beta.kubernetes.io/azure-load-balancer-internal: "true"
     service.beta.kubernetes.io/azure-load-balancer-ipv4: "10.20.3.250"
