@@ -73,7 +73,8 @@ compare `k get endpoints otel-gateway-headless` with the gateway pod IPs instead
 ### Router can't reach the gateway (TLS errors in router logs)
 
 Usually an expired or not-yet-issued certificate, or a gateway pod that started before a
-renewal and still serves the old one.
+renewal and still serves the old one. (The router reloads its own server certificate daily;
+the gateway needs the restart below.)
 
 ```bash
 k get certificate                      # all should be READY=True
@@ -93,6 +94,9 @@ ApiManagementGatewayLogs
 - 429: the caller hit the per-app rate limit (3000/min) or daily quota. Limits are per
   calling app (`azp`), so one noisy sender can't starve the others.
 - 413: payload over 4 MB. Senders should batch smaller.
+- 500 with a backend connection error in `ApiManagementGatewayLogs`: APIM doesn't trust the
+  router's certificate. Usually the cluster CA changed (yearly rotation, or cert-manager reinstalled)
+  and deploy.sh hasn't been rerun to give APIM the new one.
 
 ### Who read the tokenization key
 
