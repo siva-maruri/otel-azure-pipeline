@@ -4,7 +4,7 @@ An OpenTelemetry pipeline on Azure where nothing is public and nothing holds a s
 Apps send OTLP, a two-tier Collector on AKS scrubs and tail-samples it, and it lands in
 Azure Data Explorer for querying and ADLS Gen2 for the long-term archive.
 
-Companion to [telemetry-scrubber](https://github.com/siva8537853-blip/telemetry-scrubber),
+Companion to [telemetry-scrubber](https://github.com/siva-maruri/telemetry-scrubber),
 which handles the entropy checks and tokenization the Collector can't do on its own.
 
 ```mermaid
@@ -26,6 +26,7 @@ flowchart LR
 | `infra/` | Bicep for the VNet, private DNS, private AKS, ADX, ADLS Gen2, Key Vault, APIM, Log Analytics |
 | `collector/` | Helm values for the router and gateway tiers (open-telemetry/opentelemetry-collector chart), cert-manager certificates for mTLS between them |
 | `adx/` | Table definitions, retention and caching policies, and on-call query functions |
+| `alerts/` | Prometheus alert rules on the collectors' own metrics, with promtool unit tests |
 | `apim/` | Inbound policy for the OTLP API: JWT validation, per-caller limits, payload cap |
 | `scripts/` | `deploy.sh`, `validate.sh`, `local_test.sh`, `send_test_span.sh` |
 | `docs/adr/` | Why it's built this way: two tiers, ADX over Log Analytics, no Event Hubs yet, no secrets, scrub at the source, mTLS with cert-manager |
@@ -38,7 +39,7 @@ az login
 bash scripts/deploy.sh rg-otel-pipeline westus2
 ```
 
-Set `prefix`, `otlpAudience` and `apimPublisherEmail` in `infra/main.bicepparam` first. The
+Set `prefix`, `otlpAudience`, `apimPublisherEmail` and `alertEmail` in `infra/main.bicepparam` first. The
 defaults use Dev SKUs for ADX and APIM to keep a demo cheap; `infra/prod.bicepparam` is the
 same template with SLA-backed SKUs (`bash scripts/deploy.sh <rg> <region>` picks the dev file;
 pass the prod file to `az deployment group create` directly for production).
@@ -72,6 +73,20 @@ access disabled and are reached over private endpoints. APIM runs in internal mo
 the OTLP front door is only reachable from inside the network. It still needs a public IP
 for its management plane; that's a platform requirement for stv2 VNet injection.
 
+**The pipeline watches itself.** Both collector tiers expose their internal metrics, Azure
+Monitor managed Prometheus scrapes them, and five alerts cover the ways this pipeline
+actually fails: no collector reporting, no spans arriving, an exporter queue filling, an
+exporter dropping spans, and receivers refusing data under memory pressure. The rules live in
+`alerts/collector-rules.yaml`, are unit-tested with promtool against synthetic healthy and
+failing series, and Bicep deploys that same file, so what's tested is what runs. Each alert
+links to its runbook section.
+
+**Autoscaling, with a slow scale-down on the gateway.** Both tiers scale on CPU (gateway 3 to
+12 pods, router 2 to 8), and the node pool autoscales underneath them. The gateway scales down
+one pod at a time after 15 quiet minutes, because every change reshuffles which gateway owns
+which trace (ADR 1) and traces in flight are sampled on partial data. The router is stateless
+and scales freely.
+
 **Mutual TLS between the tiers.** cert-manager runs a private CA in the namespace and issues
 a server certificate to the gateway and a client certificate to the router, rotating both
 before they expire. The gateway has no plaintext listener and rejects clients without a
@@ -92,7 +107,9 @@ numbers and AWS keys are masked by the `redaction` processor, SAS signatures by 
 
 `scripts/validate.sh` builds and lints the Bicep, checks the APIM policy is well-formed,
 renders both Helm releases and validates the resulting Collector configs with the same
-otelcol-contrib version the pods run (0.161.0).
+otelcol-contrib version the pods run (0.161.0), then checks the alert rules and runs their
+promtool unit tests. The alert tests are themselves checked: loosening the exporter-failure
+threshold makes them fail.
 
 `scripts/local_test.sh` goes further: it runs the rendered router and gateway configs
 locally over mTLS with test certificates and debug exporters in place of ADX and blob storage.
@@ -107,6 +124,12 @@ and the auth header and SAS signature are gone. CI runs both.
   and services scrub before sending (ADR 5), but it isn't TLS. Closing it properly means
   moving the CA into Key Vault so APIM can trust it for backend validation, since cert-manager's
   in-cluster CA doesn't exist yet when the Bicep deployment runs.
+- Collector metrics reach Azure Monitor through its public ingestion endpoints (over the
+  Microsoft network, authenticated, but not a private endpoint). Keeping that private needs
+  an Azure Monitor Private Link Scope, which isn't set up here.
+- Never deployed to a live subscription. Everything above is validated offline: templates
+  build and lint, collector configs pass the official validator, and the local test runs the
+  real configs. A first real deployment will likely need small fixes.
 
 Left out on purpose, with the reasoning in the ADRs: Event Hubs in front of ADX (ADR 3), and
 entropy checks and tokenization in the Collector itself (ADR 5, they happen in the SDK).
