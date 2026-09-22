@@ -13,6 +13,7 @@ bicep build infra/main.bicep --outfile "$work/main.json"
 bicep lint infra/main.bicep
 bicep build-params infra/main.bicepparam --outfile "$work/main.parameters.json"
 bicep build-params infra/prod.bicepparam --outfile "$work/prod.parameters.json"
+bicep build-params infra/trial.bicepparam --outfile "$work/trial.parameters.json"
 
 echo "-- apim policy"
 python3 -c "import sys, xml.dom.minidom as m; m.parse(sys.argv[1])" apim/otlp-ingest-policy.xml
@@ -21,10 +22,14 @@ echo "-- collector"
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null 2>&1 || true
 helm repo update open-telemetry >/dev/null
 
+# Both profiles: the defaults, and the free-trial overlays deploy.sh layers on top.
+for profile in default trial; do
 for release in gateway router; do
+  overlay=()
+  [ "$profile" = trial ] && overlay=(-f "collector/trial/$release-trial.yaml")
   helm template "otel-$release" open-telemetry/opentelemetry-collector \
     --version "$chart_version" --namespace observability \
-    -f "collector/$release-values.yaml" > "$work/$release.yaml"
+    -f "collector/$release-values.yaml" "${overlay[@]}" > "$work/$release.yaml"
 
   # Pull the rendered collector config out of the ConfigMap and validate it with the
   # same collector version the pods run. Env placeholders get dummy values.
@@ -40,8 +45,27 @@ PY
   AZURE_TENANT_ID=00000000-0000-0000-0000-000000000000 AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
   AZURE_FEDERATED_TOKEN_FILE=/var/run/secrets/azure/tokens/azure-identity-token \
     otelcol-contrib validate --config="$work/$release-config.yaml"
-  echo "   $release: ok"
+  echo "   $release ($profile): ok"
 done
+done
+
+# The trial profile has to fit on one 2-vCPU node with room for the system pods.
+python3 - << 'PY'
+import re, sys, yaml
+
+node_millicores = 2000
+system_reserve = 800  # kubelet, CNI, CoreDNS, metrics agents
+requested = 0
+for release in ("gateway", "router"):
+    values = yaml.safe_load(open(f"collector/trial/{release}-trial.yaml"))
+    cpu = values["resources"]["requests"]["cpu"]
+    millis = int(cpu[:-1]) if cpu.endswith("m") else int(float(cpu) * 1000)
+    requested += millis * values["autoscaling"]["minReplicas"]
+
+if requested > node_millicores - system_reserve:
+    sys.exit(f"trial collectors request {requested}m, more than one node has spare")
+print(f"   trial profile requests {requested}m CPU, fits a 2-vCPU node")
+PY
 
 echo "-- consistency"
 # The router's internal load balancer IP lives in three places (ADR 7); they must agree.

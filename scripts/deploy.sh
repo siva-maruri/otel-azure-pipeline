@@ -5,6 +5,7 @@
 # minutes, and the second pass (APIM learning the router CA) adds more.
 # OTEL_CLIENT_NAMESPACES: namespaces whose apps send to the router. They get its CA and the
 # otel-client=true label the NetworkPolicy allows (default: "default").
+# DEPLOY_PROFILE=trial: one small node and smaller collectors, for a free-account test run.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,6 +15,23 @@ chart_version="${CHART_VERSION:-0.173.1}"
 cert_manager_version="${CERT_MANAGER_VERSION:-v1.15.3}"
 client_namespaces="${OTEL_CLIENT_NAMESPACES:-default}"
 
+case "${DEPLOY_PROFILE:-}" in
+  trial)
+    param_file="infra/trial.bicepparam"
+    gateway_overlay="-f gateway-trial.yaml"
+    router_overlay="-f router-trial.yaml"
+    ;;
+  "")
+    param_file="infra/main.bicepparam"
+    gateway_overlay=""
+    router_overlay=""
+    ;;
+  *)
+    echo "unknown DEPLOY_PROFILE: ${DEPLOY_PROFILE}" >&2
+    exit 1
+    ;;
+esac
+
 az group create -n "$rg" -l "$location" -o none
 
 echo "-- infra"
@@ -22,7 +40,7 @@ echo "-- infra"
 prev_ca="$(az deployment group show -g "$rg" -n otel-pipeline-router-trust \
   --query properties.parameters.routerCaCertificate.value -o tsv 2>/dev/null || true)"
 outputs="$(az deployment group create -g "$rg" -n otel-pipeline \
-  -f infra/main.bicep -p infra/main.bicepparam -p routerCaCertificate="$prev_ca" \
+  -f infra/main.bicep -p "$param_file" -p routerCaCertificate="$prev_ca" \
   --query properties.outputs -o json)"
 out() { jq -r ".$1.value" <<< "$outputs"; }
 
@@ -32,6 +50,7 @@ trap 'rm -rf "$bundle"' EXIT
 
 cp collector/gateway-values.yaml collector/router-values.yaml collector/certs.yaml \
   collector/ama-metrics-settings.yaml collector/network-policies.yaml "$bundle/"
+cp collector/trial/*.yaml "$bundle/"
 cat > "$bundle/gateway-overrides.yaml" << YAML
 serviceAccount:
   annotations:
@@ -68,10 +87,10 @@ echo "-- collectors"
     helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts &&
     helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
       --version $chart_version -n observability --create-namespace \
-      -f gateway-values.yaml -f gateway-overrides.yaml --wait &&
+      -f gateway-values.yaml $gateway_overlay -f gateway-overrides.yaml --wait &&
     helm upgrade --install otel-router open-telemetry/opentelemetry-collector \
       --version $chart_version -n observability \
-      -f router-values.yaml --wait &&
+      -f router-values.yaml $router_overlay --wait &&
     kubectl apply -f network-policies.yaml"
 )
 
@@ -82,7 +101,7 @@ ca_der="$(az aks command invoke -g "$rg" -n "$aks" -o json \
   --command "kubectl -n observability get secret otel-ca -o jsonpath='{.data.tls\\.crt}'" \
   | jq -r .logs | base64 -d | openssl x509 -outform der | base64 | tr -d '\n')"
 az deployment group create -g "$rg" -n otel-pipeline-router-trust \
-  -f infra/main.bicep -p infra/main.bicepparam -p routerCaCertificate="$ca_der" -o none
+  -f infra/main.bicep -p "$param_file" -p routerCaCertificate="$ca_der" -o none
 
 echo
 echo "APIM gateway (private): $(out apimGatewayUrl)/otlp/v1/traces"
