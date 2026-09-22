@@ -38,14 +38,21 @@ ports:
   zipkin:
     enabled: false
 
-# Client cert and CA from cert-manager (collector/certs.yaml).
+# From cert-manager (collector/certs.yaml): a client cert for the gateway hop, and a server
+# cert for the receivers.
 extraVolumes:
   - name: tls
     secret:
       secretName: otel-router-tls
+  - name: server-tls
+    secret:
+      secretName: otel-router-server-tls
 extraVolumeMounts:
   - name: tls
     mountPath: /etc/otel/tls
+    readOnly: true
+  - name: server-tls
+    mountPath: /etc/otel/server-tls
     readOnly: true
 
 # Internal load balancer on a fixed IP so APIM has a stable backend (routerIlbIp in Bicep).
@@ -60,6 +67,23 @@ config:
     jaeger: null
     zipkin: null
     prometheus: null
+    # TLS on both OTLP listeners. APIM validates the certificate against the CA it's given
+    # on deploy (see scripts/deploy.sh); in-cluster apps trust the otel-ca-bundle ConfigMap.
+    # reload_interval picks up cert-manager renewals without a restart.
+    otlp:
+      protocols:
+        grpc:
+          tls:
+            cert_file: /etc/otel/server-tls/tls.crt
+            key_file: /etc/otel/server-tls/tls.key
+            min_version: "1.2"
+            reload_interval: 24h
+        http:
+          tls:
+            cert_file: /etc/otel/server-tls/tls.crt
+            key_file: /etc/otel/server-tls/tls.key
+            min_version: "1.2"
+            reload_interval: 24h
 
   exporters:
     debug: null

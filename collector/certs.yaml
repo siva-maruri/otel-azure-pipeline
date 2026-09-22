@@ -75,3 +75,27 @@ spec:
   issuerRef:
     name: otel-ca
     kind: Issuer
+---
+# Server certificate for the router's OTLP receivers, so traffic into the pipeline is
+# encrypted too. APIM connects to the internal load balancer IP (routerIlbIp in Bicep);
+# in-cluster apps use the service name. RSA because APIM is the main client.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-router-server-tls
+  namespace: observability
+spec:
+  secretName: otel-router-server-tls
+  duration: 2160h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  usages: [server auth]
+  dnsNames:
+    - otel-router-opentelemetry-collector.observability.svc.cluster.local
+    - otel-router-opentelemetry-collector.observability.svc
+  ipAddresses:
+    - 10.20.3.250
+  issuerRef:
+    name: otel-ca
+    kind: Issuer
